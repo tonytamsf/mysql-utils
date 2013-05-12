@@ -1,0 +1,117 @@
+#!/home/y/bin/perl -w
+# -*- Perl -*- 
+
+# RCS info
+#  $Author$
+#  $Date$
+#  $Id$
+#  $Source$
+#
+
+use BerkeleyDB;
+use strict;
+package ynews_clean_related;
+use DBIx::DWIW;
+use RunMutex '/tmp/.ynews_clean_related';
+
+# ----------------------------------------------------------------------
+
+sub new {
+    my ($S_type) = shift || return undef;
+    my $HR_self = {};
+    bless $HR_self, $S_type;
+    return $HR_self;
+}
+
+#----------------------------------------------------------------------	
+
+=head2 run
+
+
+
+  USAGE:
+
+  RETURN:
+    
+=cut
+
+    sub run
+{
+    my $self = shift;
+    ref($self)
+	or die
+	    "ERR: run called outside of object context\n";
+    my $db = DBIx::DWIW->Connect(
+				 DB   => "us",
+				 User => "user",
+				 Pass => "password",
+				 Host => 'hostname.com',
+				 );
+
+    if (not $db)
+    {
+	die "Couldn't connect to database : $@";
+    }
+
+    # ----------------------------------------
+    # Loop and delete any 'related' table entries that don't have
+    # article_id that exist in article
+    # ----------------------------------------
+    while (1) 
+    {
+	my $S_sql = qq|
+              select related.* from
+              related
+              left join article on related.article_id = article.article_id
+              where article.article_id is null
+              limit 1000
+					|;
+	if ($@)
+	{
+	    print "ERROR: $S_sql $@\n";
+	    sleep (10);
+	    next;
+	}
+	
+	my @records = $db->Hashes($S_sql);
+	my $S_insert_sql = qq|insert into related_dead values |;
+	my @A_delete_sql = ();
+	foreach my $HR_row (@records)
+	{
+	    push(@A_delete_sql,qq|delete from related where
+		location = '$HR_row->{location}' and
+		    article_id =  '$HR_row->{article_id}' and
+			keyword = '$HR_row->{keyword}'|);
+	    $S_insert_sql .= qq|
+		 ('$HR_row->{location}', '$HR_row->{article_id}', '$HR_row->{keyword}'),
+	    |;
+	}
+
+	$S_insert_sql =~ s/,\s*$//gs;
+
+##	print $S_insert_sql,"\n";
+##	die();
+	$db->Execute($S_insert_sql);
+	if ($@ && $@ !~ /Duplicate entry/)
+	{
+	    print "ERROR: $S_insert_sql $@\n";
+	    exit();
+	}
+	foreach my $S_delete_sql (@A_delete_sql)
+	{
+	
+	    $db->Execute($S_delete_sql);
+	    if ($@)
+	    {
+		print "ERROR: $S_delete_sql $@\n";
+		exit();
+	    }
+	}
+    }
+    
+}
+
+package main;
+my $OR_cleaner = new ynews_clean_related;
+$OR_cleaner->run();
+1;

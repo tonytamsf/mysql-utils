@@ -1,0 +1,16 @@
+#!/home/y/bin/perl -w
+
+use strict;
+
+my $S_host = shift;
+while ()
+{
+    my $S_cmd = qq#sh -c "cat /homes/tonytam/Work/Jake/reset_slave.sql | mysql -A -h $S_host -u root -p6eeWh1z | grep No"#;
+    my $S_err = system($S_cmd);
+    if ($S_err || $? != 0)
+    {
+	sleep (2);
+    }
+}
+		 
+  

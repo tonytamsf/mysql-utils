@@ -1,0 +1,69 @@
+#!/home/y/bin/perl -w
+#
+# $Source: /CVSROOT/yahoo/finance/mysql/bin/purge_master_logs,v $
+
+## On a slave server, purge the replication logs if there are "too
+## many" sitting around and sucking up disk space.
+
+$|++;
+
+use DBI;
+
+use strict;
+use RunMutex '/tmp/.replicate.lock';
+use DBIx::DWIW;
+
+
+my $S_server = shift;
+unless(defined($S_server)) {
+  $S_server = "localhost";
+}
+my $dsn = "DBI:mysql:database=us;host=hostname.com;port=3306";
+my $dbh = DBI->connect($dsn, 'user', 'password', {PrintError => 1} );
+
+if (not $dbh)
+{
+    die "Couldn't connect to database!";
+}
+
+my $sth = $dbh->prepare('select story,category_id from article limit 10');
+my $status = $sth->execute();
+if (! $status)
+{
+   die "Query failed ";
+}
+
+
+my %H_count = ();
+my %H_total = ();
+my %H_avg = ();
+if ($sth)
+{
+  while (my $ref = $sth->fetchrow_hashref)
+  {
+     my $count = &word_count(\$ref->{story});
+     my $category_id = $ref->{category_id};
+     $H_count{$category_id} += $count;
+     $H_total{$category_id}++;
+     $H_avg{$category_id} = $H_count{$category_id} / $H_total{$category_id};
+  }
+}
+
+foreach my $cid (sort {$H_avg{$a} <=> $H_avg{$b}} keys(%H_count))
+{
+   my $abbr = `./ynews_admin_get_grandparent.pl us $cid`;
+   print "$abbr: $H_avg{$cid}\n";
+}
+sub word_count
+{
+   my $SR_string = shift;
+   $$SR_string =~ s/\W/ /g;
+   $$SR_string =~ s/\s+/ /g;
+   my $count = () =  $$SR_string =~ / /g;
+   print $count,"\n";
+   return $count;
+}
+
+exit;
+
+__END__

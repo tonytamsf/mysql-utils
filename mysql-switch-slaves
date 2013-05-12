@@ -1,0 +1,196 @@
+#!/home/y/bin/perl -w
+
+use strict;
+
+use DBIx::DWIW;
+
+my $priMaster = $ARGV[0];
+
+#TODO: can we use mirror files here?
+#TODO: do we need to grab master status from a machine before we switch?
+
+#
+# http://yolita.smca.hostname.com/viewbug.asp?id=21401 
+#
+# We should grab the master status from the new primary master as soon as possible
+# This command should be run even before the masterdb.media.hostname.com is switched
+#
+# TODO: Better yet, we should have a utility that constantly captures the master status
+# of all the potential masters
+#
+# TODO: Might need a tool to verify that the priMaster is the same IP as masterdb.media.hostname.com
+# 
+my %master =
+(
+	'scd' => 'master.scd',
+	'sc5' => 'master.sc5', 
+	'dcn' => 'master.dcn'
+);
+
+my %slaves = 
+(
+	'sc5' => ["db2.media.sc5.hostname.com", "db3.media.sc5.hostname.com"],
+	'dcn' => ["db2.media.dcn.hostname.com", "db3.media.dcn.hostname.com", "db4.media.dcn.hostname.com"],
+	'scd' => ["db2.media.scd.hostname.com", "db3.media.scd.hostname.com", "db4.media.scd.hostname.com"],
+);
+
+my %bestMaster =
+(
+	'scd' => ['scd', 'sc5', 'dcn'],
+	'sc5' => ['sc5', 'scd', 'dcn'], 
+	'dcn' => ['dcn', 'scd', 'sc5']
+);
+
+my %masterUp;
+
+my $USER = 'tonytam';
+my $PASS = 'Pandora0';
+
+# save the current master status
+getMasterStatus($priMaster,$USER, $PASS);
+
+# check which of the masters are up
+
+foreach my $colo (keys(%master))
+{
+    $masterUp{$colo} = isMasterUp($master{$colo}, $USER, $PASS);
+}
+
+# for each of the secondary masters, make them replicate from the primary
+
+foreach my $colo (keys(%master))
+{
+	if ($masterUp{$colo} && $master{$colo} ne $priMaster)
+	{
+		changeReplication($master{$colo}, $priMaster);
+	}
+}
+
+
+# change all of the slaves to replicate from the 'best' master that is up
+
+foreach my $colo (keys(%slaves))
+{
+	my $newMaster = $priMaster;
+
+	foreach my $m (@{$bestMaster{$colo}})
+	{
+		if ($masterUp{$m})
+		{		
+		  $newMaster = $master{$m};
+		  last;
+		}
+	}
+
+	foreach my $slave (@{$slaves{$colo}})
+	{
+		changeReplication($slave, $newMaster);
+	}	
+
+}
+
+
+#TODO: implement
+
+sub changeReplication
+{
+    my ($slave, $master, $username, $password, $logfile, $logpos) = @_;
+    
+    print "changing $slave to replicate from $master\n";
+
+    my $changeMasterCmd = "mysql -u $username -p$password -h $slave -e \"slave stop; CHANGE MASTER TO MASTER_LOG_POS = $logpos, MASTER_LOG_FILE = '$logfile';  slave start; show slave status;\"";
+
+    #print `$changeMasterCmd`;
+    #print "$changeMasterCmd\n";
+    
+    return 1;
+}
+
+#
+# Get master status
+# 
+sub getMasterStatus
+{
+	my ($host, $username, $password) = @_;
+
+	my $db = new DBIx::DWIW(DB   => 'newsDBdist',
+				User => $username,
+				Pass => $password,
+				Host => $host,
+				NoRetry => 1,
+				NoAbort => 1,
+				);
+
+	unless($db)
+	{
+	    print STDERR "Database $host is not active, cannot connect\n";
+	    return 0;
+	}
+ 	my $rh_status = $db->Hash("show master status\n");
+	my $S_position = $rh_status->{Position};
+	if($S_position)
+	{
+	    print scalar(localtime()), ": $S_position\n";
+	}
+	return 0;
+}
+
+sub isMasterUp
+{
+	my ($host, $username, $password) = @_;
+
+	my $db = new DBIx::DWIW(DB   => 'newsDBdist',
+				User => $username,
+				Pass => $password,
+				Host => $host,
+				NoRetry => 1,
+				NoAbort => 1,
+				);
+
+	unless($db)
+	{
+	    print STDERR "Master $host is not active, cannot connect\n";
+	    return 0;
+	}
+
+ 	my $rh_status = $db->Hash("show master status\n");
+	my $S_prev_position = $rh_status->{Position};
+	print STDERR "sleeping 11 secs to check master status on $host\n";
+        sleep(11);
+ 	$rh_status = $db->Hash("show master status\n");
+	my $S_next_position = $rh_status->{Position};
+	if (defined($S_prev_position) && defined($S_next_position))
+        {
+             if ($S_next_position > $S_prev_position)
+             {
+                 print STDERR "Master $host is active ", ($S_next_position  - $S_prev_position), " lines transacted\n";
+                 return 1;
+             } else {
+                print STDERR "Master $host is not active, 'show master status;' showing the logs staying at $S_next_position for 11 secs\n";
+             }
+	
+	} else {
+           print STDERR "Master $host is not active, 'show master status;' not showing any action\n";
+	}
+	return 0;
+}
+
+sub getSlavePosition
+{
+    my($from, $username, $password) = @_;
+
+    print "getting slave position.... ";
+    
+    open(STATUS, "mysql -u $username -p$password -e 'show slave status' -h $from |");
+    <STATUS>;
+    my $statusline = <STATUS>;
+#print $statusline;
+    my (@status) = split('\t', $statusline);
+    my ($logfile) = $status[4];
+    my ($logposition) = $status[5];
+    close STATUS;
+    
+    print "logfile is $logfile, position is $logposition\n\n";
+
+    return ($logfile, $logposition);
+}

@@ -1,0 +1,78 @@
+#!/home/y/bin/perl -w
+
+use strict;
+
+use DBIx::DWIW;
+
+# flush
+$|=1;
+
+my $priMaster = $ARGV[0];
+
+#TODO: can we use mirror files here?
+#TODO: do we need to grab master status from a machine before we switch?
+
+#
+# We should grab the master status from the new primary master as soon as possible
+# This command should be run even before the masterdb.hostname.com is switched
+#
+# TODO: Better yet, we should have a utility that constantly captures the master status
+# of all the potential masters
+#
+# TODO: Might need a tool to verify that the priMaster is the same IP as masterdb.media.yahoo.com
+# 
+my %master =
+(
+	'slave1' => 'master1',
+	'slave2' => 'master2',
+	'slave3' => 'master3'
+
+ );
+my %masterUp;
+
+my $USER = 'root';
+my $PASS = 'password';
+
+# save the current master status
+while (1)
+{
+    foreach my $colo (keys(%master))
+    {
+        print "running 'show master status;' on $master{$colo} to determine master for $colo\n";
+	getMasterStatus($master{$colo},$USER, $PASS);
+    }
+    print "\n";
+    sleep(5);
+}
+
+#
+# Get master status
+# 
+sub getMasterStatus
+{
+	my ($host, $username, $password) = @_;
+
+	my $db = new DBIx::DWIW(DB   => 'mysql',
+				User => $username,
+				Pass => $password,
+				Host => $host,
+				NoRetry => 1,
+				NoAbort => 1,
+				);
+
+	unless($db)
+	{
+	    print STDERR "Database $host is not active, cannot connect\n";
+	    return 0;
+	}
+ 	my $rh_status = $db->Hash("show master status\n");
+	my $S_position = $rh_status->{Position};
+	my $S_file     = $rh_status->{File};
+	if($S_position)
+	{
+	    print time()," - ", scalar(localtime()), " : $host : change master to master_host = '$host', master_log_file = '$S_file', master_log_pos = $S_position;\n";
+	}
+	return 0;
+}
+
+1;
