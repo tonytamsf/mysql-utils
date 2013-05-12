@@ -7,7 +7,7 @@ use DBIx::DWIW;
 $| = 1;  #flush output
 
 my $db_host = 'hostname.com';
-my $pass = 'BEAE3776A880183E2721A2B8D9968';
+my $pass = 'password';
 my $db_name = 'codereview';
 my $user = 'codereview';
 
